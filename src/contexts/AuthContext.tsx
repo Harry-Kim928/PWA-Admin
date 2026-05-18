@@ -32,31 +32,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    supabase.auth
-      .getSession()
-      .then(async ({ data }) => {
+    let cancelled = false
+
+    const adminCheckWithTimeout = (userId: string) =>
+      Promise.race<boolean>([
+        checkIsAdmin(userId),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000)),
+      ])
+
+    ;(async () => {
+      try {
+        const { data } = await supabase.auth.getSession()
+        if (cancelled) return
         setSession(data.session)
         if (data.session) {
-          setIsAdmin(await checkIsAdmin(data.session.user.id))
+          const ok = await adminCheckWithTimeout(data.session.user.id)
+          if (!cancelled) setIsAdmin(ok)
         }
-      })
-      .catch((err) => {
-        console.error('[auth] getSession failed:', err)
-      })
-      .finally(() => {
-        setLoading(false)
-      })
+      } catch (err) {
+        console.error('[auth] init failed:', err)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (_e, s) => {
       setSession(s)
+      if (!s) {
+        setIsAdmin(false)
+        return
+      }
       try {
-        setIsAdmin(s ? await checkIsAdmin(s.user.id) : false)
+        setIsAdmin(await adminCheckWithTimeout(s.user.id))
       } catch (err) {
         console.error('[auth] admin check failed:', err)
         setIsAdmin(false)
       }
     })
-    return () => sub.subscription.unsubscribe()
+    return () => {
+      cancelled = true
+      sub.subscription.unsubscribe()
+    }
   }, [])
 
   const sendOtp: AuthContextValue['sendOtp'] = async (phone) => {
