@@ -30,13 +30,23 @@ type EditDraft = {
 
 async function fetchBookImage(
   isbn: string,
-): Promise<{ image: string | null; title?: string; publisher?: string } | null> {
+  title?: string,
+): Promise<
+  | { ok: true; image: string | null; title?: string; publisher?: string }
+  | { ok: false; error: string; status: number }
+> {
   try {
-    const r = await fetch(`/api/book-image?isbn=${encodeURIComponent(isbn)}`)
-    if (!r.ok) return null
-    return await r.json()
-  } catch {
-    return null
+    const params = new URLSearchParams()
+    if (isbn) params.set('isbn', isbn)
+    if (title) params.set('title', title)
+    const r = await fetch(`/api/book-image?${params.toString()}`)
+    const body = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      return { ok: false, error: body?.error || `요청 실패 (${r.status})`, status: r.status }
+    }
+    return { ok: true, image: body.image ?? null, title: body.title, publisher: body.publisher }
+  } catch (err) {
+    return { ok: false, error: (err as Error).message, status: 0 }
   }
 }
 
@@ -102,19 +112,25 @@ export default function TextbooksPage() {
       alert('이름, 출판사, ISBN 모두 필요해요')
       return
     }
-    const meta = await fetchBookImage(i)
+    const meta = await fetchBookImage(i, t)
+    if (!meta.ok) {
+      console.warn('[book-image]', meta.error)
+    }
     const { error } = await supabase
       .from('textbooks')
       .update({
         title: t,
         publisher: p,
         isbn: i,
-        image_url: meta?.image || null,
+        image_url: meta.ok ? meta.image : null,
       })
       .eq('id', id)
     if (error) {
       alert('수정 실패: ' + error.message)
       return
+    }
+    if (!meta.ok) {
+      alert('수정은 완료됐지만 이미지 페치 실패: ' + meta.error)
     }
     setEditingId(null)
     void fetchRows()
@@ -139,7 +155,7 @@ export default function TextbooksPage() {
       return
     }
     setAddBusy(true)
-    const meta = await fetchBookImage(i)
+    const meta = await fetchBookImage(i, t)
     const { error } = await supabase.from('textbooks').insert({
       level,
       subject,
@@ -147,15 +163,39 @@ export default function TextbooksPage() {
       title: t,
       publisher: p,
       isbn: i,
-      image_url: meta?.image || null,
+      image_url: meta.ok ? meta.image : null,
     })
     setAddBusy(false)
     if (error) {
       alert('추가 실패: ' + error.message)
       return
     }
+    if (!meta.ok) {
+      alert('추가는 완료됐지만 이미지 페치 실패: ' + meta.error)
+    }
     setNewDraft({ title: '', publisher: '', isbn: '' })
     setAdding(false)
+    void fetchRows()
+  }
+
+  const refetchImage = async (row: Textbook) => {
+    const meta = await fetchBookImage(row.isbn, row.title)
+    if (!meta.ok) {
+      alert('이미지 페치 실패: ' + meta.error)
+      return
+    }
+    if (!meta.image) {
+      alert('Naver에서 이미지 URL을 받지 못했어요.')
+      return
+    }
+    const { error } = await supabase
+      .from('textbooks')
+      .update({ image_url: meta.image })
+      .eq('id', row.id)
+    if (error) {
+      alert('저장 실패: ' + error.message)
+      return
+    }
     void fetchRows()
   }
 
@@ -193,8 +233,10 @@ export default function TextbooksPage() {
     setCsvProgress({ done: 0, total: csvParsed.length })
     let inserted = 0
     let failed = 0
+    let imageMissCount = 0
     for (const d of csvParsed) {
-      const meta = await fetchBookImage(d.isbn)
+      const meta = await fetchBookImage(d.isbn, d.title)
+      if (!meta.ok || !meta.image) imageMissCount++
       const { error } = await supabase.from('textbooks').upsert(
         {
           level,
@@ -203,7 +245,7 @@ export default function TextbooksPage() {
           title: d.title,
           publisher: d.publisher,
           isbn: d.isbn,
-          image_url: meta?.image || null,
+          image_url: meta.ok ? meta.image : null,
         },
         { onConflict: 'isbn' },
       )
@@ -212,7 +254,10 @@ export default function TextbooksPage() {
       setCsvProgress((s) => ({ ...s, done: s.done + 1 }))
     }
     setCsvBusy(false)
-    alert(`완료: ${inserted}건 삽입/갱신, ${failed}건 실패`)
+    alert(
+      `완료: ${inserted}건 삽입/갱신, ${failed}건 실패` +
+        (imageMissCount > 0 ? ` (이미지 누락 ${imageMissCount}건)` : ''),
+    )
     setCsvParsed([])
     setCsvFileName(null)
     void fetchRows()
@@ -414,6 +459,13 @@ export default function TextbooksPage() {
                         </>
                       ) : (
                         <>
+                          <button
+                            onClick={() => refetchImage(r)}
+                            className="text-xs text-gray-500 mr-2"
+                            title="Naver API로 이미지 다시 가져오기"
+                          >
+                            이미지
+                          </button>
                           <button
                             onClick={() => startEdit(r)}
                             className="text-xs text-gray-600 mr-2"
