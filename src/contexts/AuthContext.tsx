@@ -34,10 +34,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false
 
-    const adminCheckWithTimeout = (userId: string) =>
-      Promise.race<boolean>([
-        checkIsAdmin(userId),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000)),
+    // Returns true/false on resolved query, null on timeout (don't flip state)
+    const adminCheckWithTimeout = (userId: string): Promise<boolean | null> =>
+      Promise.race<boolean | null>([
+        checkIsAdmin(userId).then((v) => v),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
       ])
 
     ;(async () => {
@@ -46,8 +47,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (cancelled) return
         setSession(data.session)
         if (data.session) {
-          const ok = await adminCheckWithTimeout(data.session.user.id)
-          if (!cancelled) setIsAdmin(ok)
+          const result = await adminCheckWithTimeout(data.session.user.id)
+          if (!cancelled && result !== null) setIsAdmin(result)
         }
       } catch (err) {
         console.error('[auth] init failed:', err)
@@ -56,17 +57,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     })()
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_e, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange(async (event, s) => {
       setSession(s)
-      if (!s) {
+      if (event === 'SIGNED_OUT' || !s) {
         setIsAdmin(false)
         return
       }
+      // Skip admin re-check on token refresh / unrelated updates.
+      // Once we know the user is an admin, stay admin until SIGNED_OUT.
+      if (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION') return
       try {
-        setIsAdmin(await adminCheckWithTimeout(s.user.id))
+        const result = await adminCheckWithTimeout(s.user.id)
+        if (result !== null) setIsAdmin(result)
       } catch (err) {
         console.error('[auth] admin check failed:', err)
-        setIsAdmin(false)
       }
     })
     return () => {
