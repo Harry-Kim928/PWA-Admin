@@ -32,14 +32,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      setSession(data.session)
-      if (data.session) setIsAdmin(await checkIsAdmin(data.session.user.id))
-      setLoading(false)
-    })
+    supabase.auth
+      .getSession()
+      .then(async ({ data }) => {
+        setSession(data.session)
+        if (data.session) {
+          setIsAdmin(await checkIsAdmin(data.session.user.id))
+        }
+      })
+      .catch((err) => {
+        console.error('[auth] getSession failed:', err)
+      })
+      .finally(() => {
+        setLoading(false)
+      })
+
     const { data: sub } = supabase.auth.onAuthStateChange(async (_e, s) => {
       setSession(s)
-      setIsAdmin(s ? await checkIsAdmin(s.user.id) : false)
+      try {
+        setIsAdmin(s ? await checkIsAdmin(s.user.id) : false)
+      } catch (err) {
+        console.error('[auth] admin check failed:', err)
+        setIsAdmin(false)
+      }
     })
     return () => sub.subscription.unsubscribe()
   }, [])
