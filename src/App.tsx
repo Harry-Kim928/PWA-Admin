@@ -4,6 +4,7 @@ import RequireAdmin from './components/RequireAdmin'
 import DevicesPage from './pages/DevicesPage'
 import LoginPage from './pages/LoginPage'
 import PushPage from './pages/PushPage'
+import TextbooksPage from './pages/TextbooksPage'
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/devices" replace />} />
           <Route path="/devices" element={<DevicesPage />} />
           <Route path="/push" element={<PushPage />} />
+          <Route path="/textbooks" element={<TextbooksPage />} />
           <Route path="*" element={<Navigate to="/devices" replace />} />
         </Route>
       </Route>
